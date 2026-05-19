@@ -1,0 +1,56 @@
+# 中国贸易数据爬虫配置
+# China Trade Data Crawler Configuration
+
+countries:
+  - name: 越南
+    code: VN
+    mofcom_key: "%E8%B6%8A%E5%8D%97"
+  - name: 泰国
+    code: TH
+    mofcom_key: "%E6%B3%B0%E5%9B%BD"
+  - name: 印度尼西亚
+    code: ID
+    mofcom_key: "%E5%8D%B0%E5%BA%A6%E5%B0%BC%E8%A5%BF%E4%BA%9A"
+
+crawl:
+  months_back: 24
+  request_interval_seconds: 3.0
+  max_retries: 3
+  timeout_seconds: 30
+
+google_trends:
+  enabled: true
+  keywords:
+    vietnam:
+      - China Vietnam trade
+      - 中越贸易
+      - Vietnam import
+      - 越南市场
+    thailand:
+      - China Thailand trade
+      - 中泰贸易
+      - Thailand import
+      - 泰国市场
+    indonesia:
+      - China Indonesia trade
+      - 印尼贸易
+      - Indonesia import
+      - 印尼市场
+
+customs:
+  enabled: true
+  fallback_to_mofcom: true
+  cookie_cache_path: /tmp/customs_cookies.json
+  cookie_cache_ttl_minutes: 30
+  request_interval_seconds: 8.0
+
+output:
+  base_dir: /Users/leez/crawl-china/data
+  format: csv
+  compress: false
+
+logging:
+  level: INFO
+  file: /Users/leez/crawl-china/logs/crawler.log
+  max_size_mb: 10
+  backup_count: 5
