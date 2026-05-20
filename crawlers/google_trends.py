@@ -50,22 +50,30 @@ class GoogleTrendsCrawler(BaseCrawler):
             self.logger.warning("  pytrends not installed")
             return []
 
+        trend_cfg = self.config.get("google_trends", {})
+        proxy = trend_cfg.get("proxy")
+        timeout_val = trend_cfg.get("timeout_seconds", 45)
+
+        requests_args = {
+            "headers": {
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/125.0.0.0 Safari/537.36"
+                ),
+            },
+            "timeout": timeout_val,
+        }
+        if proxy:
+            requests_args["proxies"] = {"http": proxy, "https": proxy}
+
         try:
             pytrends = TrendReq(
                 hl="en-US",
                 tz=360,
-                timeout=(10, 25),
                 retries=2,
                 backoff_factor=1.0,
-                requests_args={
-                    "headers": {
-                        "User-Agent": (
-                            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                            "AppleWebKit/537.36 (KHTML, like Gecko) "
-                            "Chrome/125.0.0.0 Safari/537.36"
-                        ),
-                    }
-                },
+                requests_args=requests_args,
             )
 
             time.sleep(5)
@@ -89,8 +97,10 @@ class GoogleTrendsCrawler(BaseCrawler):
 
         except Exception as e:
             err_msg = str(e)
-            if "429" in err_msg or "rate limit" in err_msg.lower() or "TooManyRequests" in type(e).__name__:
+            if "429" in err_msg or "rate limit" in err_msg.lower():
                 self.logger.warning(f"  {group_name}: pytrends rate limited - {e}")
+            elif "timeout" in err_msg.lower() or "timed out" in err_msg.lower():
+                self.logger.warning(f"  {group_name}: pytrends timeout (Google inaccessible without proxy)")
             else:
                 self.logger.error(f"  {group_name}: pytrends error - {e}")
             return []
