@@ -89,66 +89,111 @@ class CustomsCrawler(BaseCrawler):
         )
 
     def _fetch_via_api(self) -> List[TradeRecord]:
-        """通过 stats.customs.gov.cn JSON API 获取数据."""
+        """通过 Playwright 在浏览器内调用 stats.customs.gov.cn API."""
         countries = self.config.get("countries", [])
         months = generate_month_range(self.months_back)
         records = []
 
-        # 注入 cookie 到 session
-        cookie_str = cookie_dict_to_header(self._cookies)
-        self.session.headers["Cookie"] = cookie_str
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError:
+            self.logger.warning("playwright not installed")
+            return []
 
-        api_url = f"{self.STATS_BASE}{self.STATS_API}"
+        self.logger.info("Launching Playwright for customs API...")
+        try:
+            with sync_playwright() as p:
+                browser = p.chromium.launch(headless=True)
+                context = browser.new_context(
+                    user_agent=(
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                        "AppleWebKit/537.36 (KHTML, like Gecko) "
+                        "Chrome/125.0.0.0 Safari/537.36"
+                    ),
+                    locale="zh-CN",
+                )
+                page = context.new_page()
 
-        for country in countries:
-            country_name = country["name"]
-            country_code = country.get("code", "")
-
-            for ym in months:
+                # 访问首页，让瑞数6完成 cookie 初始化
+                self.logger.info("  Loading homepage...")
+                page.goto("http://stats.customs.gov.cn/", wait_until="domcontentloaded", timeout=60000)
+                page.wait_for_timeout(5000)
                 try:
-                    # 构造查询参数
-                    params = {
-                        "startDate": ym,
-                        "endDate": ym,
-                        "countryCode": country_code,
-                        "page": 1,
-                        "rows": 500,
-                    }
+                    page.wait_for_load_state("networkidle", timeout=30000)
+                except Exception:
+                    pass
 
-                    self._rate_limit(
-                        self.customs_cfg.get("request_interval_seconds", 8.0)
-                    )
+                api_url = f"{self.STATS_BASE}{self.STATS_API}"
 
-                    resp = self.session.post(api_url, data=params, timeout=30)
+                for country in countries:
+                    country_name = country["name"]
+                    country_code = country.get("code", "")
 
-                    if resp.status_code == 412:
-                        self.logger.warning(
-                            f"Customs WAF re-triggered (412), cookies may have expired"
+                    for ym in months:
+                        try:
+                            params = {
+                                "pageNum": 1,
+                                "pageSize": 500,
+                                "tradeType": "出口",
+                                "startDate": ym,
+                                "endDate": ym,
+                                "tradeCountry": country_code,
+                                "customs": "",
+                                "tradeMode": "",
+                                "productCode": "",
+                                "currency": "USD",
+                            }
+
+                            # 用 fetch 在浏览器上下文里调 API
+                            result = page.evaluate("""
+                                async (params) => {
+                                    const resp = await fetch('/paramManager/selMainExportList', {
+                                        method: 'POST',
+                                        headers: {
+                                            'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+                                            'X-Requested-With': 'XMLHttpRequest',
+                                        },
+                                        body: new URLSearchParams(params).toString(),
+                                    });
+                                    if (!resp.ok) return {_error: resp.status};
+                                    return await resp.json();
+                                }
+                            """, params)
+
+                            if isinstance(result, dict) and result.get("_error") == 412:
+                                self.logger.warning(
+                                    f"Customs WAF re-triggered (412) for {country_name} {ym}"
+                                )
+                                page.goto("http://stats.customs.gov.cn/", wait_until="domcontentloaded", timeout=30000)
+                                page.wait_for_timeout(3000)
+                                continue
+
+                            if isinstance(result, dict) and "_error" in result:
+                                self.logger.warning(
+                                    f"Customs API returned {result['_error']} for {country_name} {ym}"
+                                )
+                                continue
+
+                            country_records = self._parse_api_response(
+                                result, country_name, ym
+                            )
+                            records.extend(country_records)
+
+                        except Exception as e:
+                            self.logger.warning(
+                                f"Customs API error for {country_name} {ym}: {e}"
+                            )
+                            continue
+
+                        self._rate_limit(
+                            self.customs_cfg.get("request_interval_seconds", 5.0)
                         )
-                        # 尝试刷新 cookie 一次
-                        self._cookies = self._get_cookies()
-                        if self._cookies:
-                            self.session.headers["Cookie"] = cookie_dict_to_header(self._cookies)
-                            self._rate_limit(8.0)
-                            resp = self.session.post(api_url, data=params, timeout=30)
 
-                    if resp.status_code != 200:
-                        self.logger.warning(
-                            f"Customs API returned {resp.status_code} for {country_name} {ym}"
-                        )
-                        continue
+                browser.close()
 
-                    data = resp.json()
-                    country_records = self._parse_api_response(
-                        data, country_name, ym
-                    )
-                    records.extend(country_records)
-
-                except Exception as e:
-                    self.logger.warning(
-                        f"Customs API error for {country_name} {ym}: {e}"
-                    )
-                    continue
+        except Exception as e:
+            self.logger.error(f"Playwright API fetch failed: {e}")
+            return []
 
         return records
 

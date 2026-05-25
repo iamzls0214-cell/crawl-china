@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 CSV_FIELDS = [
     "source", "country", "direction", "period", "commodity",
-    "hs_code", "value_usd", "quantity", "unit", "yoy_pct", "data_date",
+    "hs_code", "hs_section", "value_usd", "quantity", "unit", "yoy_pct", "data_date",
 ]
 
 

@@ -5,6 +5,7 @@ Usage:
     python main.py                         # 运行全部爬虫
     python main.py --source mofcom         # 仅商务部
     python main.py --source customs        # 仅海关
+    python main.py --source comtrade       # 仅 UN Comtrade
     python main.py --source trends         # 仅 Google Trends
     python main.py --cron                  # cron 模式 (读 CRON_MODE 环境变量)
     python main.py --output json           # JSON 输出
@@ -12,6 +13,7 @@ Usage:
     python main.py --months 12             # 覆盖查询月数
     python main.py --dry-run               # 验证连通性
     python main.py --refresh-cookies       # 强制刷新 Playwright cookies
+    python main.py --parse-customs ~/Downloads/customs/  # 解析手动下载的海关CSV
 """
 
 import argparse
@@ -22,9 +24,12 @@ import sys
 from datetime import datetime
 from typing import List
 
+import yaml
+
 from utils.logging_setup import setup_logging
 from crawlers.mofcom import MofcomCrawler
 from crawlers.customs import CustomsCrawler
+from crawlers.comtrade import ComtradeCrawler
 from crawlers.google_trends import GoogleTrendsCrawler
 from crawlers.trade_record import TradeRecord
 from output.writers import write_records
@@ -39,7 +44,7 @@ def parse_args():
     )
     parser.add_argument(
         "--source",
-        choices=["all", "mofcom", "customs", "trends"],
+        choices=["all", "mofcom", "customs", "comtrade", "trends"],
         default="all",
         help="选择数据源 (default: all)",
     )
@@ -74,6 +79,12 @@ def parse_args():
         "--config",
         default=None,
         help="配置文件路径",
+    )
+    parser.add_argument(
+        "--parse-customs",
+        default=None,
+        metavar="DIR",
+        help="解析手动从 stats.customs.gov.cn 下载的 CSV 目录",
     )
     return parser.parse_args()
 
@@ -128,6 +139,17 @@ def run_crawler(
 def main():
     args = parse_args()
 
+    # --parse-customs 模式: 仅解析 CSV，不走爬虫
+    if args.parse_customs:
+        from utils.parse_customs_csv import CustomsCSVParser
+        output_dir = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "data", "customs_manual"
+        )
+        parser = CustomsCSVParser(args.parse_customs, output_dir)
+        parser.parse_all()
+        parser.write_outputs()
+        sys.exit(0)
+
     # 确定配置路径
     config_path = args.config
     if config_path is None:
@@ -156,7 +178,7 @@ def main():
         cron_mode = os.environ.get("CRON_MODE", "all")
         logger.info(f"CRON_MODE={cron_mode}")
         if cron_mode == "weekly":
-            args.source = "mofcom"  # 运行 mofcom + customs
+            args.source = "all"  # mofcom + customs + comtrade
         elif cron_mode == "trends":
             args.source = "trends"
 
@@ -175,6 +197,7 @@ def main():
     output_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 
     all_records = []
+    config = yaml.safe_load(open(config_path))
 
     if args.source in ("all", "mofcom"):
         mofcom = MofcomCrawler(config_path)
@@ -183,14 +206,21 @@ def main():
         records = run_crawler(mofcom, "mofcom", output_dir, args.output, args.dry_run)
         all_records.extend(records)
 
-    if args.source in ("all", "customs"):
+    if args.source in ("all", "customs") and config.get("customs", {}).get("enabled", True):
         customs = CustomsCrawler(config_path)
         if args.months:
             customs.months_back = args.months
         records = run_crawler(customs, "customs", output_dir, args.output, args.dry_run)
         all_records.extend(records)
 
-    if args.source in ("all", "trends"):
+    if args.source in ("all", "comtrade") and config.get("comtrade", {}).get("enabled", True):
+        comtrade = ComtradeCrawler(config_path)
+        if args.months:
+            comtrade.months_back = args.months
+        records = run_crawler(comtrade, "comtrade", output_dir, args.output, args.dry_run)
+        all_records.extend(records)
+
+    if args.source in ("all", "trends") and config.get("google_trends", {}).get("enabled", False):
         trends = GoogleTrendsCrawler(config_path)
         records = run_crawler(trends, "google_trends", output_dir, args.output, args.dry_run)
         all_records.extend(records)
